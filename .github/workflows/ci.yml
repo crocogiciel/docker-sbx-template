@@ -1,0 +1,54 @@
+name: CI
+
+# Use a concurrency group to ensure a single job is running at a time
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true # Cancel the previous job
+
+on:
+  # Manual trigger
+  workflow_dispatch:
+
+  # When a pull request is opened
+  pull_request:
+
+  # When a commit is pushed
+  push:
+
+jobs:
+  build:
+    name: Build (${{ matrix.agent }} - ${{ matrix.template.context }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      # Both lists are matrix dimensions, so the jobs are their cartesian
+      # product: every template is built against every agent.
+      matrix:
+        # The base agent image (used as the agent name in the Dockerfile).
+        # Add an agent here to build every template against it.
+        agent: [claude-code]
+        # Add more templates here.
+        template:
+          - context: templates/aidd
+
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build the image
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.template.context }}
+          build-args: |
+            BASE_AGENT=${{ matrix.agent }}
+          platforms: linux/amd64,linux/arm64
+          file: ${{ matrix.template.context }}/Dockerfile
+          push: false
