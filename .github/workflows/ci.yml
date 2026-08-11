@@ -16,7 +16,7 @@ on:
   push:
 
 jobs:
-  build:
+  build-templates:
     name: Build (${{ matrix.agent }} - ${{ matrix.template.context }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -52,3 +52,33 @@ jobs:
           platforms: linux/amd64,linux/arm64
           file: ${{ matrix.template.context }}/Dockerfile
           push: false
+
+  validate-kits:
+    name: Validate kit (${{ matrix.kit }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Add more kits here.
+        kit: [aidd, pnpm]
+
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v6
+
+      - name: Install the sbx CLI
+        # `sbx kit validate` has no standalone distribution — pull the same
+        # linux-amd64 release tarball `sbx` itself ships (matches the
+        # runner's arch) and lift just the binary out of it.
+        env:
+          SBX_VERSION: "0.38.0"
+        run: |
+          curl -fsSL -o sbx.tar.gz \
+            "https://github.com/docker/sbx-releases/releases/download/v${SBX_VERSION}/DockerSandboxes-linux-amd64.tar.gz"
+          tar xzf sbx.tar.gz docker-sbx/sbx
+          sudo install docker-sbx/sbx /usr/local/bin/sbx
+
+      - name: Validate the kit
+        run: sbx kit validate "kits/${{ matrix.kit }}"
