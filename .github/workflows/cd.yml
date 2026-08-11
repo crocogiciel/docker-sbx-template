@@ -9,17 +9,17 @@ on:
   # Manual trigger
   workflow_dispatch:
 
-  # When a commit is pushed to master
+  # When a commit is pushed to main
   push:
     branches:
-      - master
+      - main
 
 permissions:
   contents: read # To clone the repository
   packages: write # To push the image to the GitHub Container Registry
 
 jobs:
-  build:
+  publish-templates:
     name: Build (${{ matrix.agent }} - ${{ matrix.template.context }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -36,7 +36,7 @@ jobs:
         # Add more templates here.
         template:
           - context: templates/aidd
-            image: ghcr.io/crocogiciel/sbx-aidd
+            image: ghcr.io/crocogiciel/sbx-template-aidd
 
     steps:
       - name: Checkout the repository
@@ -65,3 +65,51 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ matrix.template.image }}:${{ matrix.agent }}
+
+  publish-kits:
+    name: Publish kit (${{ matrix.kit }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Add more kits here.
+        kit: [aidd, pnpm]
+
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v6
+
+      - name: Install the sbx CLI
+        # `sbx kit push` has no standalone distribution — pull the same
+        # linux-amd64 release tarball `sbx` itself ships (matches the
+        # runner's arch) and lift just the binary out of it.
+        env:
+          SBX_VERSION: "0.38.0"
+        run: |
+          curl -fsSL -o sbx.tar.gz \
+            "https://github.com/docker/sbx-releases/releases/download/v${SBX_VERSION}/DockerSandboxes-linux-amd64.tar.gz"
+          tar xzf sbx.tar.gz docker-sbx/sbx
+          sudo install docker-sbx/sbx /usr/local/bin/sbx
+
+      - name: Validate the kit
+        run: sbx kit validate "kits/${{ matrix.kit }}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the kit
+        # `sbx kit push` reads from the Docker credential store, which
+        # docker/login-action just populated for ghcr.io. Tagged both by the
+        # kit's own spec.yaml version and `latest`, mirroring how the
+        # template image above is tagged.
+        run: |
+          version="$(sbx kit inspect --json "kits/${{ matrix.kit }}" | jq -r .manifest.version)"
+          image="ghcr.io/crocogiciel/sbx-kit-${{ matrix.kit }}"
+          sbx kit push "kits/${{ matrix.kit }}" "${image}:${version}"
+          sbx kit push "kits/${{ matrix.kit }}" "${image}:latest"
