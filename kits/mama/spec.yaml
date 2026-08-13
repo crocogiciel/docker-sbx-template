@@ -1,0 +1,96 @@
+# Requires Docker Sandboxes 0.36 or newer — that is where `schemaVersion: "2"`
+# lands. An older `sbx` decodes this file with the v1 grammar instead and
+# rejects `permissions`, `setup` and `agentInstructions`; check with
+# `sbx version`.
+schemaVersion: "2"
+kind: mixin
+name: mama
+version: "1.0.0"
+displayName: MAMA
+description: "Installs the MAMA Claude Code plugin: decision-memory hooks and /mama:* commands for recording, searching and resuming decisions"
+sourceURL: "https://github.com/jungjaehoon-lifegamez/MAMA"
+
+permissions:
+  network:
+    allow:
+      # `claude plugin marketplace add` clones
+      # https://github.com/jungjaehoon-lifegamez/claude-plugins.git over
+      # HTTPS. Plugin installs are then served from that local clone.
+      - github.com
+      # The plugin's `mcpServers.mama` entry runs `npx -y
+      # @jungjaehoon/mama-server` on first use, which npm fetches from here.
+      - registry.npmjs.org
+      # `/mama:search` embeds text via `@huggingface/transformers`, which
+      # pulls model weights from here on first use. Model hosting on this
+      # domain can redirect through other CDN hosts; if a `/mama:search` call
+      # still fails to reach the network, that residual redirect is the
+      # likely cause.
+      - huggingface.co
+
+setup:
+  # Each entry is a shell string run through `sh -c`, in declaration order, as
+  # root unless `user` says otherwise.
+  install:
+    # Run as the agent: `claude plugin install` writes to $HOME/.claude, so as
+    # root it would land in /root and the agent would see nothing.
+    #
+    # This installs the Claude Code plugin only — no `mama-os` daemon, no
+    # OAuth into Slack/Gmail/Trello/Telegram/Discord, no `mama start`. The
+    # plugin's own hooks need `node` on PATH — the sandbox agent images
+    # provide it, which is why nothing is installed for them here.
+    - command: |
+        set -e
+        command -v claude >/dev/null 2>&1 || {
+          echo "mama: this kit only applies to the claude-code agent" >&2
+          exit 1
+        }
+        claude plugin marketplace add jungjaehoon-lifegamez/claude-plugins
+        claude plugin install mama@jungjaehoon-plugins
+      user: "1000"
+      description: "Install the MAMA marketplace and plugin"
+
+    # Installing a plugin records it in ~/.claude/settings.json
+    # (`extraKnownMarketplaces` + `enabledPlugins`). The sandbox runtime
+    # replaces that file with the host's own at session start, so on its own the
+    # install above leaves every plugin `✘ disabled` in the session. Managed
+    # settings live outside the home directory and take precedence, so the
+    # wiring is copied there — the user file is left untouched, which keeps this
+    # working should the runtime ever stop overwriting it (both files agree, and
+    # these keys are objects, so a merge cannot double anything up).
+    #
+    # Merged rather than written: the file is shared with the agent image and
+    # any other kit, so an existing one must survive.
+    - command: |
+        set -e
+        managed=/etc/claude-code/managed-settings.json
+        user=/home/agent/.claude/settings.json
+        mkdir -p "$(dirname "$managed")"
+        [ -s "$managed" ] || echo '{}' > "$managed"
+        # Never create the user file from root — it would end up root-owned.
+        # An empty second input makes the merge a no-op instead.
+        [ -s "$user" ] || user=/dev/null
+        tmp="$(mktemp)"
+        jq -s '.[0] * (.[1]
+                 | {extraKnownMarketplaces, enabledPlugins}
+                 | with_entries(select(.value != null)))' \
+           "$managed" "$user" > "$tmp"
+        mv "$tmp" "$managed"
+        chmod 0644 "$managed"
+      description: "Keep the plugins enabled once the runtime replaces the user settings"
+
+agentInstructions:
+  content: |
+    MAMA is installed as a Claude Code plugin: decision-memory hooks plus
+    `/mama:*` commands. No background daemon is required and none is
+    installed — this is the plugin-only surface, not `mama-os`.
+
+    - `/mama:decision` records a decision to memory.
+    - `/mama:search` searches recorded decisions.
+    - `/mama:checkpoint` saves a checkpoint of the current session state.
+    - `/mama:resume` resumes from a saved checkpoint.
+    - `/mama:configure` configures the plugin.
+
+    The first `/mama:*` call triggers an automatic ~1-2 minute download: the
+    plugin's MCP server (`@jungjaehoon/mama-server`, fetched via `npx`) and,
+    for `/mama:search`, an embedding model pulled from Hugging Face. Expect a
+    pause on that first call; subsequent calls are fast.
